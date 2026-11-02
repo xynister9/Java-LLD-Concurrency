@@ -1,7 +1,6 @@
 package vendingmachine;
 
 import java.util.*;
-import java.util.function.Supplier;
 
 // ============================================================================
 // 1. Data entities
