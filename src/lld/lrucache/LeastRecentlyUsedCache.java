@@ -39,13 +39,16 @@ final class LruPolicy<K> implements EvictionPolicy<K> {
 
     @Override
     public void keyAdded(K key) {
-        Node<K> n = new Node<>(key);
+        Node<K> n = nodes.containsKey(key) ? nodes.get(key) : new Node<>(key);
         nodes.put(key, n);
         addFront(n);
     }
 
     @Override
     public void keyAccessed(K key) {
+        if (!nodes.containsKey(key)) {
+            throw new IllegalArgumentException("The key does not exist in the policy");
+        }
         Node<K> n = nodes.get(key);
         unlink(n);
         addFront(n);
@@ -101,7 +104,7 @@ class BoundedCache<K, V> implements Cache<K, V> {
     private final int capacity;
     private long hits, misses, evictions;
 
-    private final Map<K,V> store ; 
+    private final Map<K, V> store;
     private final EvictionPolicy<K> evictionPolicy;
 
     BoundedCache(int capacity, Supplier<EvictionPolicy<K>> evictionPolicy) {
@@ -109,7 +112,7 @@ class BoundedCache<K, V> implements Cache<K, V> {
             throw new IllegalArgumentException("Capacity must be atleast 1");
         }
         Objects.requireNonNull(evictionPolicy, "evictionPolicy");
-        
+
         store = new HashMap<>();
         this.capacity = capacity;
         this.evictionPolicy = evictionPolicy.get();
@@ -122,29 +125,27 @@ class BoundedCache<K, V> implements Cache<K, V> {
             hits++;
             evictionPolicy.keyAccessed(key);
             return Optional.of(store.get(key));
-        }
-        else{
+        } else {
             misses++;
             return Optional.empty();
-        } 
+        }
     }
 
     @Override
     public synchronized void put(K key, V value) {
-        Objects.requireNonNull(key ,"key");
+        Objects.requireNonNull(key, "key");
         Objects.requireNonNull(value, "value");
 
         if (store.containsKey(key)) {
             evictionPolicy.keyAccessed(key);
-            store.put(key,value);
+            store.put(key, value);
         } else {
             if (store.size() == capacity) {
                 Optional<K> evictedKey = evictionPolicy.evict();
-                if(evictedKey.isPresent()){
+                if (evictedKey.isPresent()) {
                     store.remove(evictedKey.get());
                     evictions++;
-                }
-                else{
+                } else {
                     throw new IllegalStateException("Policy out of sync");
                 }
             }
@@ -184,7 +185,7 @@ public class LeastRecentlyUsedCache {
     public static void main(String[] args) {
         System.out.println("\n----LRU Cache----\n");
 
-        Supplier<EvictionPolicy<String>> policySuplier = ()->new LruPolicy<String>();
+        Supplier<EvictionPolicy<String>> policySuplier = () -> new LruPolicy<String>();
         BoundedCache<String, Integer> lruCache = new BoundedCache<String, Integer>(3, policySuplier);
 
         lruCache.put("L", 1);
@@ -198,25 +199,30 @@ public class LeastRecentlyUsedCache {
         System.out.println("Value for R is " + lruCache.get("R"));
 
         System.out.println("Value for F is " + lruCache.get("F"));
-        
+
         concurrencyTest();
 
     }
 
-    private static void concurrencyTest(){
+    private static void concurrencyTest() {
         for (int round = 0; round < 50; round++) {
-            Supplier<EvictionPolicy<Integer>> policySuplier = ()->new LruPolicy<Integer>();
-            BoundedCache<Integer, Integer> cache = new BoundedCache<>(100, policySuplier);
+            LruPolicy<Integer> policy = new LruPolicy<>();
+            BoundedCache<Integer, Integer> cache = new BoundedCache<>(100, () -> policy);
             List<Callable<Long>> tasks = new ArrayList<>();
             for (int t = 0; t < 8; t++) {
                 long seed = round * 31L + t;
                 tasks.add(() -> {
-                    Random r = new Random(seed); long gets = 0;
+                    Random r = new Random(seed);
+                    long gets = 0;
                     for (int i = 0; i < 10_000; i++) {
                         int key = r.nextInt(500), op = r.nextInt(100);
-                        if (op < 60) { cache.get(key); gets++; }
-                        else if (op < 95) cache.put(key, i);
-                        else cache.remove(key);
+                        if (op < 60) {
+                            cache.get(key);
+                            gets++;
+                        } else if (op < 95)
+                            cache.put(key, i);
+                        else
+                            cache.remove(key);
                     }
                     return gets;
                 });
@@ -226,6 +232,13 @@ public class LeastRecentlyUsedCache {
             CacheStats s = cache.stats();
             TestKit.check(cache.size() <= 100, "round " + round + ": size " + cache.size());
             TestKit.check(s.hits() + s.misses() == totalGets, "round " + round + ": lost stat updates");
+
+            int drained = 0;
+            while (policy.evict().isPresent())
+                if (++drained > 100)
+                    throw new AssertionError("policy has extra keys or a cycle");
+            TestKit.check(drained == cache.size(),
+                    "round " + round + ": policy " + drained + " vs store " + cache.size());
         }
     }
 }
