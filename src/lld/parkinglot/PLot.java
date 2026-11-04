@@ -62,7 +62,7 @@ final class Ticket {
     private final String spotId;
     private final String gateId;
     private final Instant entryTime;
-    private TicketStatus status = TicketStatus.ACTIVE;
+    private volatile TicketStatus status = TicketStatus.ACTIVE;
 
     Ticket(String ticketId, String licensePlateNumber, VehicleType vehicleType, String spotId, String gateId,
             Instant entryTime) {
@@ -219,7 +219,7 @@ class ParkingSlot {
         return vehicle.vehicleType().canParkIn(slotSize);
     }
 
-    public void parkVehicle(Vehicle vehicle) {
+    void parkVehicle(Vehicle vehicle) {
         if (parkedVehicle.isPresent()) throw new ParkingSlotOccupiedException(slotId);
         if (!canFitVehicle(vehicle)) throw new CanNotParkVehicleException(slotId, slotSize);
         parkedVehicle = Optional.of(vehicle);
@@ -344,7 +344,7 @@ class DefaultSlotAllocationStrategy implements SlotAllocationStrategy {
     }
 }
 
-// 5. ParkingLot
+// 5. ParkingLot Facade
 
 class ParkingLot {
     private final Clock clock;
@@ -385,7 +385,7 @@ class ParkingLot {
         this.slotAllocationStrategy = slotAllocationStrategy;
     }
 
-    public Ticket parkVehicle(Vehicle vehicle, String gateId) {
+    public synchronized Ticket parkVehicle(Vehicle vehicle, String gateId) {
         // 1. Validate
         Objects.requireNonNull(vehicle, "vehicle must not be null");
         Checks.nonBlank(gateId, "gateId");
@@ -406,7 +406,7 @@ class ParkingLot {
         return ticket;
     }
 
-    public Reciept unpark(String ticketId, String gateId) {
+    public synchronized Reciept unpark(String ticketId, String gateId) {
         // 1. Validate (the lot's own map decides what is a real ticket)
         Checks.nonBlank(ticketId, "ticketId");
         Checks.nonBlank(gateId, "gateId");
@@ -433,7 +433,7 @@ class ParkingLot {
     }
 
     /** floor -> (size -> free count), both levels in stable sorted order. */
-    public Map<Integer, Map<SlotSize, Integer>> getAvailability() {
+    public synchronized Map<Integer, Map<SlotSize, Integer>> getAvailability() {
         Map<Integer, Map<SlotSize, Integer>> floorMap = new TreeMap<>();
         for (ParkingFloor floor : floors) {
             Map<SlotSize, Integer> slotMap = new TreeMap<>();
